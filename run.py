@@ -68,6 +68,14 @@ def main():
         torch.distributed.barrier()
     cur_ckpts = os.listdir(save_dir)
 
+    if configs.latent_variant == "learnable_weights":
+        from coconut_learnable import CoconutLearnable as CoconutClass
+    elif configs.latent_variant == "linear_projection":
+        from coconut_linear import CoconutLinear as CoconutClass
+    elif configs.latent_variant == "mlp_projection":
+        from coconut_mlp import CoconutMLP as CoconutClass
+    print(f"Using Coconut variant: {CoconutClass}")
+
     # Handle situations where training was interrupted
     if len(cur_ckpts) > 0 and not configs.only_eval:
         # If checkpoints exist and we're not just running evaluation,
@@ -176,8 +184,9 @@ def main():
 
     if configs.coconut:
         # Wrap the model in Coconut class
-        model = Coconut(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
-
+##        model = Coconut(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
+        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
+        
     if configs.load_model_path != "None" and not loaded:
         print(model.load_state_dict(saved_weights, strict=False))
 
