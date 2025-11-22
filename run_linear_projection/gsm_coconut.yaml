@@ -1,6 +1,6 @@
-project: coconut_learnable
-name: gsm-coconut_learnable
-save_path: exps/gsm_coconut_learnable
+project: coconut_linear
+name: gsm-coconut_linear
+save_path: exps/gsm_coconut_linear
 
 only_eval: False
 
@@ -8,7 +8,7 @@ coconut: True
 cot: False
 no_thoughts: False
 no_cot: False
-latent_variant: learnable_weights
+latent_variant: linear_projection
 
 latent_window_size: 4
 c_thought: 2

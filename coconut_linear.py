@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-10-04
+# Last update: Lucia Licakova, 2025-11-22
 
 import torch
 import torch.nn as nn
@@ -12,13 +12,8 @@ from coconut import Coconut
 Outputs = namedtuple("Outputs", ["loss", "inputs_embeds", "logits"])
 # Upper limit for latent thoughts
 MAX_N_LATENT = 8
-# number of previous tokens to consider for context
-LATENT_WINDOW_SIZE = 3
-# weights for those tokens, sum = 1 -> no need to normalise
-LATENT_WEIGHTS = [0.6, 0.3, 0.1]
 
-
-class CoconutLinear(Coconut):
+class CoconutLearnable(Coconut):
 
     def __init__(
         self,
@@ -27,6 +22,7 @@ class CoconutLinear(Coconut):
         start_latent_id,
         end_latent_id,
         eos_token_id,
+        configs
     ):
 
         super(Coconut, self).__init__()
@@ -36,10 +32,10 @@ class CoconutLinear(Coconut):
         self.eos_token_id = eos_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
-        # parameters for context
-        self.latent_window_size = LATENT_WINDOW_SIZE       
-        self.latent_weights = torch.tensor(LATENT_WEIGHTS)
-        
+        # number of previous tokens to consider for context
+        self.latent_window_size = configs.latent_window_size
+        # register the tensor as a learnable model parameter
+        self.latent_weights = nn.Parameter(torch.zeros(self.latent_window_size))
 
         # tested with GPT2 and Llama3
         if isinstance(self.base_causallm, GPT2LMHeadModel):
@@ -48,6 +44,13 @@ class CoconutLinear(Coconut):
         else:
             # Convert token IDs (input_ids) into vectors (embeddings)
             self.embedding = self.base_causallm.get_input_embeddings()
+
+        # the aggregated latent vector must match the embedding size (from the model)
+        hidden_dim = self.embedding.embedding_dim
+        # add a linear projection layer to transform the aggregated hidden
+        # state before inserting it back into the model
+        self.proj = nn.Linear(hidden_dim, hidden_dim)
+
 
     def forward(self, input_ids, attention_mask, labels, position_ids, **kwargs):
 
@@ -170,7 +173,9 @@ class CoconutLinear(Coconut):
             ]
 
             # Ensure weights are on the right device
-            weights = self.latent_weights.to(inputs_embeds.device)
+            # Softmax converts the vector so that it sums to 1 (relative importance of previous tokens)
+            weights = torch.softmax(self.latent_weights.to(inputs_embeds.device), dim=0)
+
             # Replace each latent token position's embedding with
             # a weighted combination of the last n_tokens hidden states
             for idx_pair in filling_indices:
@@ -192,10 +197,6 @@ class CoconutLinear(Coconut):
                 weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
                 
                 tensor_list[batch_idx][token_idx] = weighted_hidden
-##                tensor_list[batch_idx][token_idx] = hidden_states[
-##                    # "-1" take the hidden state of the token immediately before the latent token
-##                    batch_idx, token_idx - 1 - hidden_states_offset, :
-##                ]
 
             # Convert the Python lists back into a proper tensor of shape (batch, seq_len, hidden_size)
             inputs_embeds = torch.stack(

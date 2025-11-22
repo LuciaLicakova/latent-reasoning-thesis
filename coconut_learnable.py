@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-10-04
+# Last update: Lucia Licakova, 2025-11-22
 
 import torch
 import torch.nn as nn
@@ -12,8 +12,6 @@ from coconut import Coconut
 Outputs = namedtuple("Outputs", ["loss", "inputs_embeds", "logits"])
 # Upper limit for latent thoughts
 MAX_N_LATENT = 8
-# number of previous tokens to consider for context
-LATENT_WINDOW_SIZE = 3
 
 class CoconutLearnable(Coconut):
 
@@ -24,6 +22,7 @@ class CoconutLearnable(Coconut):
         start_latent_id,
         end_latent_id,
         eos_token_id,
+        configs
     ):
 
         super(Coconut, self).__init__()
@@ -33,10 +32,10 @@ class CoconutLearnable(Coconut):
         self.eos_token_id = eos_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
-        # parameters for context
-        self.latent_window_size = LATENT_WINDOW_SIZE
+        # number of previous tokens to consider for context
+        self.latent_window_size = configs.latent_window_size
         # register the tensor as a learnable model parameter
-        self.latent_weights = nn.Parameter(torch.zeros(LATENT_WINDOW_SIZE))
+        self.latent_weights = nn.Parameter(torch.zeros(self.latent_window_size))
 
         # tested with GPT2 and Llama3
         if isinstance(self.base_causallm, GPT2LMHeadModel):
@@ -191,10 +190,6 @@ class CoconutLearnable(Coconut):
                 weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
                 
                 tensor_list[batch_idx][token_idx] = weighted_hidden
-##                tensor_list[batch_idx][token_idx] = hidden_states[
-##                    # "-1" take the hidden state of the token immediately before the latent token
-##                    batch_idx, token_idx - 1 - hidden_states_offset, :
-##                ]
 
             # Convert the Python lists back into a proper tensor of shape (batch, seq_len, hidden_size)
             inputs_embeds = torch.stack(
