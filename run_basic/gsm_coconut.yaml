@@ -1,18 +1,19 @@
 project: coconut_learnable
-name: gsm-cot_learnable
-save_path: exps/gsm_cot_learnable
+name: gsm-coconut_basic
+save_path: exps/gsm_coconut_basic
 
 only_eval: False
 
-coconut: False
-cot: True
+coconut: True
+cot: False
 no_thoughts: False
 no_cot: False
-latent_variant: learnable_weights
+latent_variant: None
 
-c_thought: 0
-epochs_per_stage: 1
-max_latent_stage: 0
+latent_window_size: 4
+c_thought: 2
+epochs_per_stage: 3
+max_latent_stage: 3
 pad_latent_to_max: True
 
 save_only_improve: False
@@ -23,10 +24,10 @@ load_model_path: None
 
 seed: 0
 resume: 0
-bf16: False
+bf16: false
 train_path: data/gsm_train.json
 val_path: data/gsm_valid.json
-reset_optimizer: False
+reset_optimizer: True
 
 batch_size_training: 4
 debug: False

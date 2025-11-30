@@ -1,6 +1,5 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-# Last update: Lucia Licakova, 2025-11-22
+# Adapted for LoRA
+# Last update: Lucia Licakova, 2025-11-30
 
 import torch
 import torch.distributed
@@ -16,8 +15,9 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
+from peft import LoraConfig, get_peft_model, TaskType
+from transformers import BitsAndBytesConfig
 
-from coconut import Coconut
 from dataset import (
     get_dataset,
     get_question_latent_dataset,
@@ -74,6 +74,9 @@ def main():
         from coconut_linear import CoconutLinear as CoconutClass
     elif configs.latent_variant == "mlp_projection":
         from coconut_mlp import CoconutMLP as CoconutClass
+    else:
+        from coconutLora import CoconutLora as CoconutClass
+
     print(f"Using Coconut variant: {CoconutClass}")
 
     # Handle situations where training was interrupted
@@ -114,8 +117,23 @@ def main():
         )
 
     # Load a Hugging Face model and tokenizer based on the model ID in the config
-    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
+##    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
+##    tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
+    # 4-bit quantization to fit large models in 11GB
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        # 1080Ti does not support bf16
+        bnb_4bit_compute_dtype=torch.float16,
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        configs.model_id,
+        quantization_config=bnb_config,
+        device_map=None
+    )
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
+
     # Make all sequences in a batch the same length to stack them into a tensor
     # Since GPT needs some padding token when training in batches, we reuse the
     # end-of-sequence token which GPT knows
@@ -176,6 +194,22 @@ def main():
             # The input embeddings and lm heads (output layer) are tied in GPT2. So the code below is not necessary
             lm_head = model.lm_head
             lm_head.weight.data[token_id] = lm_head.weight.data[target_id]
+            
+    lora_cfg = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        inference_mode=False,
+        r=8,
+        lora_alpha=32,
+        lora_dropout=0.1,
+        target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
+    )
+    
+    # With multiple GPUs, each process gets its own rank (GPU ID)
+    print(f"Running FSDP on rank = {rank}, world size = {world_size}")
+    model = model.to(rank)
+
+    model = get_peft_model(model, lora_cfg)
+    model.print_trainable_parameters()
 
     if configs.no_thoughts:
         # Disable Coconut-specific logic
@@ -184,20 +218,15 @@ def main():
 
     if configs.coconut:
         # Wrap the model in Coconut class
-##        model = Coconut(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
         model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id, configs)
         
     if configs.load_model_path != "None" and not loaded:
         print(model.load_state_dict(saved_weights, strict=False))
-
-    # With multiple GPUs, each process gets its own rank (GPU ID)
-    print(f"Running FSDP on rank = {rank}, world size = {world_size}")
-    model = model.to(rank)
+        model.to(rank)
     
     llama_auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls={
-            # GPT2Block,       # for GPT2, we don't need to shard layers (it becomes DDP)
             LlamaDecoderLayer  # only shard llama's layers.
         },
     )
@@ -205,13 +234,29 @@ def main():
     if configs.bf16:
         model.to(torch.bfloat16)
         
-    # if only eval, use ddp (to avoid bugs in fsdp)
-    if configs.only_eval:
-        parallel_model = DDP(model, device_ids=[rank])
+    # choose parallel wrapper: FSDP incompatible with bitsandbytes 4-bit params (uint8)
+    has_uint8 = any(p.dtype == torch.uint8 for p in model.parameters())
 
+    if configs.only_eval or has_uint8:
+        # Use DDP for evaluation or when quantized params (bnb) are present
+        if rank == 0:
+            print(f"Using DDP (only_eval={configs.only_eval}, has_uint8={has_uint8})")
+
+        # Check if anything remained on CPU
+        for n, p in model.named_parameters():
+            if p.device.type == "cpu":
+                print("CPU PARAM:", n)
+                p.data = p.data.to(rank)
+                
+        # separates frozen and trainable parameters for LoRA
+        parallel_model = DDP(model, device_ids=[rank],find_unused_parameters=True)
     else:
+        # Safe to use FSDP when no uint8/quantized params exist
         parallel_model = FSDP(
-            model, auto_wrap_policy=llama_auto_wrap_policy, device_id=rank
+            model,
+            auto_wrap_policy=llama_auto_wrap_policy,
+            device_id=rank,
+            use_orig_params=True,
         )
 
     # Delete the original model object since it’s now wrapped inside parallel_model

@@ -19,7 +19,7 @@ pad_latent_to_max: True
 save_only_improve: False
 uniform_prob: 0.0
 
-model_id: openai-community/gpt2
+model_id: EleutherAI/gpt-neo-1.3B
 load_model_path: None
 
 seed: 0
@@ -29,7 +29,7 @@ train_path: data/gsm_train.json
 val_path: data/gsm_valid.json
 reset_optimizer: True
 
-batch_size_training: 8
+batch_size_training: 4
 debug: False
 gradient_accumulation_steps: 4
 

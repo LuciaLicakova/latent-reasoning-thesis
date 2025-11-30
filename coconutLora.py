@@ -1,8 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-# Last update: Lucia Licakova, 2025-11-30
-# Adapted for LoRA wiht GPT-Neo
-
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
@@ -11,11 +6,10 @@ from transformers.models.gpt2 import GPT2LMHeadModel
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 
 Outputs = namedtuple("Outputs", ["loss", "inputs_embeds", "logits"])
-# Upper limit for latent thoughts
 MAX_N_LATENT = 8
 
-class CoconutLearnable(nn.Module):
-
+# applies LoRA to a GPT-Neo 1.3B while otherwise following the logic of Coconut
+class CoconutLora(nn.Module):
     def __init__(
         self,
         base_causallm,
@@ -23,24 +17,18 @@ class CoconutLearnable(nn.Module):
         start_latent_id,
         end_latent_id,
         eos_token_id,
-        configs,
+        configs=None,
     ):
-
-        super(CoconutLearnable, self).__init__()
+        super(CoconutLora, self).__init__()
         self.gen_forward_cnt = 0
         self.latent_token_id = latent_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
         self.eos_token_id = eos_token_id
         self.configs = configs
-        # number of previous tokens to consider for context
-        self.latent_window_size = 4
 
         # detect device from provided base model parameters
         device = next(base_causallm.parameters()).device
-
-        # register the tensor as a learnable model parameter
-        self.latent_weights = nn.Parameter(torch.zeros(self.latent_window_size, device=device))
 
         # If the incoming model is a PeftModel, unload adapters first
         if isinstance(base_causallm, PeftModel):
@@ -48,7 +36,7 @@ class CoconutLearnable(nn.Module):
 
         # move the base model to its device before wrapping
         base_causallm = base_causallm.to(device)
-        
+
         # GPT-Neo target modules
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
@@ -58,7 +46,7 @@ class CoconutLearnable(nn.Module):
             lora_dropout=0.1,
             target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
         )
-        
+
         # apply LoRA safely
         self.base_causallm = get_peft_model(base_causallm, lora_config)
 
@@ -126,6 +114,7 @@ class CoconutLearnable(nn.Module):
 
             else:
                 # Subsequent passes: use KV cache to reuse previous attention computations
+                # GPT-Neo expects the original past_key_values object
 ##                past_key_values = [
 ##                    (
 ##                        k[:, :, : next_compute_range[0], :],
@@ -142,9 +131,7 @@ class CoconutLearnable(nn.Module):
                     position_ids=position_ids[
                         :, next_compute_range[0] : next_compute_range[1]
                     ],
-                    # pass the cache directly to GPT-Neo
-                    # the model internally handles which parts of
-                    # past_key_values to use based on the length of the current input
+                    # pass kv_cache directly
                     past_key_values=kv_cache,
                     output_hidden_states=True,
                 )
@@ -194,30 +181,11 @@ class CoconutLearnable(nn.Module):
                 for batch_idx in range(inputs_embeds.shape[0])
             ]
 
-            # Softmax converts the vector so that it sums to 1 (relative importance of previous tokens)
             # Replace each latent token position's embedding with
-            # a weighted combination of the last n_tokens hidden states
-            weights = torch.softmax(self.latent_weights, dim=0)
-
+            # just the previous hidden state
             for idx_pair in filling_indices:
                 batch_idx, token_idx = idx_pair
-                # Determine how many previous tokens are available
-                n_tokens = min(self.latent_window_size, token_idx - hidden_states_offset)
-                # Safety check for the first token
-                if n_tokens <= 0:
-                    continue
-                # Get the hidden states of the n_tokens tokens immediately before the last token
-                hidden_slice = hidden_states[
-                    batch_idx, token_idx - n_tokens - hidden_states_offset: token_idx - hidden_states_offset, :
-                ]
-                # Take the last n_tokens elements from the weight vector and normalise these selected
-                # weights so they sum to 1 (even if there are fewer tokens available)
-                w = weights[-n_tokens:] / weights[-n_tokens:].sum()
-                # Reshape the 1D weight vector to (n_tokens, 1), multiply the hidden states element-wise
-                # Sum accross the n_tokens dimension, return a weighted combination of the previous hidden states
-                weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
-                
-                tensor_list[batch_idx][token_idx] = weighted_hidden
+                tensor_list[batch_idx][token_idx] = hidden_states[batch_idx, token_idx - 1 - hidden_states_offset, :]
 
             # Convert the Python lists back into a proper tensor of shape (batch, seq_len, hidden_size)
             inputs_embeds = torch.stack(
@@ -249,7 +217,7 @@ class CoconutLearnable(nn.Module):
 ##                if kv_cache
 ##                else None
 ##            ),
-            past_key_values=kv_cache if kv_cache else None,
+            past_key_values=(kv_cache if kv_cache else None),
             output_hidden_states=True,
         )
         logits.append(outputs.logits)
@@ -278,6 +246,7 @@ class CoconutLearnable(nn.Module):
         )
         # Output a single scalar loss for the entire batch
         return Outputs(loss=loss, inputs_embeds=inputs_embeds, logits=logits)
+
 
     def train(self):
         self.base_causallm.train()
