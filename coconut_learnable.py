@@ -53,7 +53,11 @@ class CoconutLearnable(nn.Module):
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
+            # lower ranks are faster but less expressive
             r=8,
+            # scales the influence of the adapter's output
+            # lower alpha relies more on the pre-trained weights
+            # rule of thumb: 2 * r
             lora_alpha=32,
             lora_dropout=0.1,
             target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
