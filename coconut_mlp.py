@@ -1,24 +1,20 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-10-04
+# Last update: Lucia Licakova, 2025-12-06
+# Adapted for LoRA wiht GPT-Neo
 
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from collections import namedtuple
 from transformers.models.gpt2 import GPT2LMHeadModel
-from coconut import Coconut
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 
 Outputs = namedtuple("Outputs", ["loss", "inputs_embeds", "logits"])
 # Upper limit for latent thoughts
 MAX_N_LATENT = 8
-# number of previous tokens to consider for context
-LATENT_WINDOW_SIZE = 3
-# weights for those tokens, sum = 1 -> no need to normalise
-LATENT_WEIGHTS = [0.6, 0.3, 0.1]
 
-
-class CoconutMLP(Coconut):
+class CoconutMLP(nn.Module):
 
     def __init__(
         self,
@@ -27,23 +23,61 @@ class CoconutMLP(Coconut):
         start_latent_id,
         end_latent_id,
         eos_token_id,
+        configs,
     ):
 
-        super(Coconut, self).__init__()
+        super(CoconutLearnable, self).__init__()
         self.gen_forward_cnt = 0
-        self.base_causallm = base_causallm
         self.latent_token_id = latent_token_id
-        self.eos_token_id = eos_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
-        # parameters for context
-        self.latent_window_size = LATENT_WINDOW_SIZE       
-        self.latent_weights = torch.tensor(LATENT_WEIGHTS)
-        
+        self.eos_token_id = eos_token_id
+        self.configs = configs
+        # number of previous tokens to consider for context
+        self.latent_window_size = 4
 
-        # tested with GPT2 and Llama3
+        # detect device from provided base model parameters
+        device = next(base_causallm.parameters()).device
+
+        # register the tensor as a learnable model parameter
+        self.latent_weights = nn.Parameter(torch.zeros(self.latent_window_size, device=device))
+
+        # If the incoming model is a PeftModel, unload adapters first
+        if isinstance(base_causallm, PeftModel):
+            base_causallm.unload()
+
+        # move the base model to its device before wrapping
+        base_causallm = base_causallm.to(device)
+        
+        # GPT-Neo target modules
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            # lower ranks are faster but less expressive
+            r=8,
+            # scales the influence of the adapter's output
+            # lower alpha relies more on the pre-trained weights
+            # rule of thumb: 2 * r
+            lora_alpha=32,
+            lora_dropout=0.1,
+            target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
+        )
+        
+        # apply LoRA safely
+        self.base_causallm = get_peft_model(base_causallm, lora_config)
+
+        # ensure the whole wrapped model is on the right device and dtype
+        self.base_causallm = self.base_causallm.to(device).to(torch.float32)
+
+        # Define the MLP for latent projection
+        hidden_size = self.base_causallm.config.hidden_size
+        self.latent_mlp = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size)
+        )
+
         if isinstance(self.base_causallm, GPT2LMHeadModel):
-            # GPT's architecture in Hugging Face is slightly different
             self.embedding = self.base_causallm.transformer.get_input_embeddings()
         else:
             # Convert token IDs (input_ids) into vectors (embeddings)
@@ -104,13 +138,13 @@ class CoconutMLP(Coconut):
 
             else:
                 # Subsequent passes: use KV cache to reuse previous attention computations
-                past_key_values = [
-                    (
-                        k[:, :, : next_compute_range[0], :],
-                        v[:, :, : next_compute_range[0], :],
-                    )
-                    for k, v in kv_cache
-                ]
+##                past_key_values = [
+##                    (
+##                        k[:, :, : next_compute_range[0], :],
+##                        v[:, :, : next_compute_range[0], :],
+##                    )
+##                    for k, v in kv_cache
+##                ]
                 # Recompute embeddings from next_compute_range[0] onward
                 outputs = self.base_causallm(
                     inputs_embeds=inputs_embeds[
@@ -120,7 +154,10 @@ class CoconutMLP(Coconut):
                     position_ids=position_ids[
                         :, next_compute_range[0] : next_compute_range[1]
                     ],
-                    past_key_values=past_key_values,
+                    # pass the cache directly to GPT-Neo
+                    # the model internally handles which parts of
+                    # past_key_values to use based on the length of the current input
+                    past_key_values=kv_cache,
                     output_hidden_states=True,
                 )
                 # the model didn’t output hidden states for the prefix [0, k) because those tokens came from KV cache
@@ -169,10 +206,11 @@ class CoconutMLP(Coconut):
                 for batch_idx in range(inputs_embeds.shape[0])
             ]
 
-            # Ensure weights are on the right device
-            weights = self.latent_weights.to(inputs_embeds.device)
+            # Softmax converts the vector so that it sums to 1 (relative importance of previous tokens)
             # Replace each latent token position's embedding with
             # a weighted combination of the last n_tokens hidden states
+            weights = torch.softmax(self.latent_weights, dim=0)
+
             for idx_pair in filling_indices:
                 batch_idx, token_idx = idx_pair
                 # Determine how many previous tokens are available
@@ -190,12 +228,8 @@ class CoconutMLP(Coconut):
                 # Reshape the 1D weight vector to (n_tokens, 1), multiply the hidden states element-wise
                 # Sum accross the n_tokens dimension, return a weighted combination of the previous hidden states
                 weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
-                
-                tensor_list[batch_idx][token_idx] = weighted_hidden
-##                tensor_list[batch_idx][token_idx] = hidden_states[
-##                    # "-1" take the hidden state of the token immediately before the latent token
-##                    batch_idx, token_idx - 1 - hidden_states_offset, :
-##                ]
+                # Apply the MLP to the weighted hidden state
+                tensor_list[batch_idx][token_idx] = self.latent_mlp(weighted_hidden)
 
             # Convert the Python lists back into a proper tensor of shape (batch, seq_len, hidden_size)
             inputs_embeds = torch.stack(
@@ -215,18 +249,19 @@ class CoconutMLP(Coconut):
             # Only attend to tokens seen so far
             attention_mask=attention_mask[:, : next_compute_range[1]],
             position_ids=position_ids[:, next_compute_range[0] : next_compute_range[1]],
-            past_key_values=(
-                [
-                    (
-                        # Reuse attention only from the past context (before the current compute range)
-                        k[:, :, : next_compute_range[0], :],
-                        v[:, :, : next_compute_range[0], :],
-                    )
-                    for k, v in kv_cache
-                ]
-                if kv_cache
-                else None
-            ),
+##            past_key_values=(
+##                [
+##                    (
+##                        # Reuse attention only from the past context (before the current compute range)
+##                        k[:, :, : next_compute_range[0], :],
+##                        v[:, :, : next_compute_range[0], :],
+##                    )
+##                    for k, v in kv_cache
+##                ]
+##                if kv_cache
+##                else None
+##            ),
+            past_key_values=kv_cache if kv_cache else None,
             output_hidden_states=True,
         )
         logits.append(outputs.logits)
