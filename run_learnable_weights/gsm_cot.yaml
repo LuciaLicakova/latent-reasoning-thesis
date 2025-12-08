@@ -33,5 +33,5 @@ debug: False
 gradient_accumulation_steps: 4
 
 num_epochs: 25
-lr: 1.0e-4
+lr: 1.0e-6
 weight_decay: 0.01

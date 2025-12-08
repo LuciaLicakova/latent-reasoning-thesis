@@ -478,6 +478,10 @@ def main():
                 if (step + 1) % configs.gradient_accumulation_steps == 0 or step == len(
                     train_dataloader
                 ) - 1:
+                    # Clip gradients: if the total gradient norm exceeds 1.0, scale
+                    # them down to prevent exploding gradients
+                    # prevents large gradient spikes; leaves normal gradients untouched
+                    torch.nn.utils.clip_grad_norm_(parallel_model.parameters(), max_norm=1.0)
                     # Update weights
                     optimizer.step()
                     # Reset gradients and update the progress bar
