@@ -280,7 +280,7 @@ def main():
     # If training is enabled, also tokenise the training set
     if not configs.only_eval:
         base_dataset_train = get_dataset(
-            configs.train_path, tokenizer, max_size=5000 if configs.debug else 100000000
+            configs.train_path, tokenizer, max_size=500 if configs.debug else 100000000
         )
     # How many tokens the model can generate during evaluation
     if "gsm" in configs.val_path:
@@ -463,6 +463,7 @@ def main():
                 batch = {
                     key: batch[key].to(rank) for key in batch.keys() if key != "idx"
                 }
+                
                 # Run the model on this batch to get outputs
                 outputs = parallel_model(**batch)
 
