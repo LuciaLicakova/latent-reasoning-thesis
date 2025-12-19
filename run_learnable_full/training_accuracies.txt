@@ -1,0 +1,14 @@
+GSM
+Accuracy on validation set: 114 / 500 = 0.228
+Accuracy on validation set: 161 / 500 = 0.322
+Accuracy on validation set: 178 / 500 = 0.356
+Accuracy on validation set: 146 / 500 = 0.292
+Accuracy on validation set: 164 / 500 = 0.328
+Accuracy on validation set: 174 / 500 = 0.348
+Accuracy on validation set: 130 / 500 = 0.26
+Accuracy on validation set: 140 / 500 = 0.28
+Accuracy on validation set: 150 / 500 = 0.3
+Accuracy on validation set: 147 / 500 = 0.294
+Accuracy on validation set: 142 / 500 = 0.284
+Accuracy on validation set: 125 / 500 = 0.25
+Accuracy on validation set: 96 / 500 = 0.192
