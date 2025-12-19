@@ -186,7 +186,7 @@ def main():
 
     if configs.coconut:
         # Wrap the model in Coconut class
-        model = Coconut(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
+        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id, configs)
 
     if configs.load_model_path != "None" and not loaded:
         print(model.load_state_dict(saved_weights, strict=False))

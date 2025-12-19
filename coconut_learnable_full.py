@@ -23,6 +23,7 @@ class CoconutLearnableFull(nn.Module):
         start_latent_id,
         end_latent_id,
         eos_token_id,
+        configs,
     ):
 
         super(CoconutLearnableFull, self).__init__()
@@ -32,6 +33,7 @@ class CoconutLearnableFull(nn.Module):
         self.eos_token_id = eos_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
+        self.configs = configs
         # parameters for context
         self.latent_window_size = LATENT_WINDOW_SIZE
         # detect device from provided base model parameters
