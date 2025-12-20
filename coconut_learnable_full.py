@@ -80,56 +80,75 @@ class CoconutLearnableFull(nn.Module):
 
         # Store past key/value pairs from the attention layers to
         # allow subsequent passes to reuse computations of tokens already processed
-        kv_cache = None
+##        kv_cache = None
         
         # Iteratively replace latent tokens with hidden states from previous steps
         for pass_idx in range(max_n_latents):
-            # First forward pass: compute the initial hidden states for the sequence before latent tokens
-            if kv_cache == None:
-                outputs = self.base_causallm(
-                    inputs_embeds=inputs_embeds[
-                        :, next_compute_range[0] : next_compute_range[1], :
-                    ],
-                    # how the new token relates to past and present tokens (used to update its representation)
-                    attention_mask=attention_mask[
-                        :, next_compute_range[0] : next_compute_range[1]
-                    ],
-                    position_ids=position_ids[
-                        :, next_compute_range[0] : next_compute_range[1]
-                    ],
-                    # Get the hidden states of all layers (needed to update latent tokens)
-                    output_hidden_states=True,
-                )
-                # No tokens have been skipped yet
-                hidden_states_offset = 0
-
-            else:
-                # Subsequent passes: use KV cache to reuse previous attention computations
-                past_key_values = [
-                    (
-                        k[:, :, : next_compute_range[0], :],
-                        v[:, :, : next_compute_range[0], :],
-                    )
-                    for k, v in kv_cache
-                ]
-                # Recompute embeddings from next_compute_range[0] onward
-                outputs = self.base_causallm(
-                    inputs_embeds=inputs_embeds[
-                        :, next_compute_range[0] : next_compute_range[1], :
-                    ],
-                    attention_mask=attention_mask[:, : next_compute_range[1]],
-                    position_ids=position_ids[
-                        :, next_compute_range[0] : next_compute_range[1]
-                    ],
-                    past_key_values=past_key_values,
-                    output_hidden_states=True,
-                )
-                # the model didn’t output hidden states for the prefix [0, k) because those tokens came from KV cache
-                hidden_states_offset = next_compute_range[0]
-                # [0, k) were skipped in outputs.hidden_states, so we need to
-                # correctly use the last hidden state
+            # without kv_cache
+            outputs = self.base_causallm(
+                inputs_embeds=inputs_embeds[
+                    :, next_compute_range[0] : next_compute_range[1], :
+                ],
+                attention_mask=attention_mask[:, : next_compute_range[1]],
+                position_ids=position_ids[
+                    :, next_compute_range[0] : next_compute_range[1]
+                ],
+                output_hidden_states=True,
+                use_cache=False,
+            )
+##            # First forward pass: compute the initial hidden states for the sequence before latent tokens
+##            if kv_cache == None:
+##                outputs = self.base_causallm(
+##                    inputs_embeds=inputs_embeds[
+##                        :, next_compute_range[0] : next_compute_range[1], :
+##                    ],
+##                    # how the new token relates to past and present tokens (used to update its representation)
+##                    attention_mask=attention_mask[
+##                        :, next_compute_range[0] : next_compute_range[1]
+##                    ],
+##                    position_ids=position_ids[
+##                        :, next_compute_range[0] : next_compute_range[1]
+##                    ],
+##                    # Get the hidden states of all layers (needed to update latent tokens)
+##                    output_hidden_states=True,
+##                    # to be compatible with new transformers
+##                    use_cache=False,
+##                )
+##                # No tokens have been skipped yet
+##                hidden_states_offset = 0
+##
+##            else:
+##                # Subsequent passes: use KV cache to reuse previous attention computations
+####                past_key_values = [
+####                    (
+####                        k[:, :, : next_compute_range[0], :],
+####                        v[:, :, : next_compute_range[0], :],
+####                    )
+####                    for k, v in kv_cache
+####                ]
+##                # Recompute embeddings from next_compute_range[0] onward
+##                outputs = self.base_causallm(
+##                    inputs_embeds=inputs_embeds[
+##                        :, next_compute_range[0] : next_compute_range[1], :
+##                    ],
+##                    attention_mask=attention_mask[:, : next_compute_range[1]],
+##                    position_ids=position_ids[
+##                        :, next_compute_range[0] : next_compute_range[1]
+##                    ],
+##                    past_key_values=past_key_values,
+##                    output_hidden_states=True,
+##                    use_cache=False,
+##                )
+##                # the model didn’t output hidden states for the prefix [0, k) because those tokens came from KV cache
+##                hidden_states_offset = next_compute_range[0]
+##                # [0, k) were skipped in outputs.hidden_states, so we need to
+##                # correctly use the last hidden state
 
             logits.append(outputs.logits)
+
+            # without kv cache
+            # No caching, nothing is skipped
+            hidden_states_offset = 0
 
             next_compute_range = (
                 # New start = previous end
@@ -143,10 +162,8 @@ class CoconutLearnableFull(nn.Module):
                 ),
             )
             # The final-layer hidden states will replace latent token embeddings in the next step
-            hidden_states = outputs.hidden_states[
-                -1
-            ]  
-            kv_cache = outputs.past_key_values
+            hidden_states = outputs.hidden_states[-1]  
+##            kv_cache = outputs.past_key_values
 
             # Feedback the continuous thoughts to the input_embeds
 
@@ -182,11 +199,17 @@ class CoconutLearnableFull(nn.Module):
                 if n_tokens <= 0:
                     continue
                 # Get the hidden states of the n_tokens tokens immediately before the last token
+##                hidden_slice = hidden_states[
+##                    batch_idx, token_idx - n_tokens - hidden_states_offset: token_idx - hidden_states_offset, :
+##                ]
+                # without kv cache
                 hidden_slice = hidden_states[
-                    batch_idx, token_idx - n_tokens - hidden_states_offset: token_idx - hidden_states_offset, :
+                    batch_idx,
+                    token_idx - n_tokens : token_idx,
+                    :
                 ]
                 # how many weights we use (even if fewer tokens are available)
-                raw = self.latent_weights[-n_tokens:]
+                raw = weights[-n_tokens:]
                 # normalise them so they sum up to 1
                 w = torch.softmax(raw, dim=0)
                 # Reshape the 1D weight vector to (n_tokens, 1), multiply the hidden states element-wise
@@ -213,19 +236,20 @@ class CoconutLearnableFull(nn.Module):
             # Only attend to tokens seen so far
             attention_mask=attention_mask[:, : next_compute_range[1]],
             position_ids=position_ids[:, next_compute_range[0] : next_compute_range[1]],
-            past_key_values=(
-                [
-                    (
-                        # Reuse attention only from the past context (before the current compute range)
-                        k[:, :, : next_compute_range[0], :],
-                        v[:, :, : next_compute_range[0], :],
-                    )
-                    for k, v in kv_cache
-                ]
-                if kv_cache
-                else None
-            ),
+##            past_key_values=(
+##                [
+##                    (
+##                        # Reuse attention only from the past context (before the current compute range)
+##                        k[:, :, : next_compute_range[0], :],
+##                        v[:, :, : next_compute_range[0], :],
+##                    )
+##                    for k, v in kv_cache
+##                ]
+##                if kv_cache
+##                else None
+##            ),
             output_hidden_states=True,
+            use_cache=False,
         )
         logits.append(outputs.logits)
         
@@ -303,7 +327,10 @@ class CoconutLearnableFull(nn.Module):
         # Generate other tokens up to max_new_tokens
         for _ in range(max_new_tokens - 1):
             # Pass the current embeddings to the model
-            outputs = self.base_causallm(inputs_embeds=new_inputs_embeds)
+            outputs = self.base_causallm(
+                inputs_embeds=new_inputs_embeds,
+                use_cache=False,
+            )
             self.gen_forward_cnt += 1
             # Choose the most probable token
             next_token = torch.argmax(outputs.logits[0, -1]).item()
