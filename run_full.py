@@ -1,7 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 # Using GPT-2, no LoRA.
-# Last update: Lucia Licakova, 2025-12-19
+# Last update: Lucia Licakova, 2025-12-28
 
 import torch
 import torch.distributed
@@ -18,7 +18,7 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 
-from coconut import Coconut
+##from coconut import Coconut
 from dataset import (
     get_dataset,
     get_question_latent_dataset,
@@ -70,9 +70,9 @@ def main():
     cur_ckpts = os.listdir(save_dir)
 
     if configs.latent_variant == "learnable_weights":
-        from coconut_learnable_full import CoconutLearnableFull as CoconutClass
+        from coconut import CoconutLearnableFull as CoconutClass
     elif configs.latent_variant == "mlp_projection":
-        from coconut_mlp_full import CoconutMLPFull as CoconutClass
+        from coconut import CoconutMLPFull as CoconutClass
     else:
         from coconut import Coconut as CoconutClass
 
@@ -186,7 +186,7 @@ def main():
 
     if configs.coconut:
         # Wrap the model in Coconut class
-        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id, configs)
+        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
 
     if configs.load_model_path != "None" and not loaded:
         print(model.load_state_dict(saved_weights, strict=False))
