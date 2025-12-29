@@ -1,5 +1,7 @@
-# Adapted for LoRA
-# Last update: Lucia Licakova, 2025-11-30
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+# Using GPT-2, no LoRA.
+# Last update: Lucia Licakova, 2025-12-29
 
 import torch
 import torch.distributed
@@ -15,8 +17,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-from peft import LoraConfig, get_peft_model, TaskType
-from transformers import BitsAndBytesConfig
+from torch.distributed.fsdp import CPUOffload
 
 from dataset import (
     get_dataset,
@@ -68,14 +69,12 @@ def main():
         torch.distributed.barrier()
     cur_ckpts = os.listdir(save_dir)
 
-    if configs.latent_variant == "learnable_weights":
-        from coconut_learnable import CoconutLearnable as CoconutClass
-    elif configs.latent_variant == "linear_projection":
-        from coconut_linear import CoconutLinear as CoconutClass
-    elif configs.latent_variant == "mlp_projection":
-        from coconut_mlp import CoconutMLP as CoconutClass
+    if configs.latent_variant == "learnable_weights_lora":
+        from coconutLora import CoconutLearnableLora as CoconutClass
+    elif configs.latent_variant == "mlp_projection_lora":
+        from coconutLora import CoconutMLPLora as CoconutClass
     else:
-        from coconutLora import CoconutLora as CoconutClass
+        from coconutLora import Coconut as CoconutClass
 
     print(f"Using Coconut variant: {CoconutClass}")
 
@@ -117,23 +116,8 @@ def main():
         )
 
     # Load a Hugging Face model and tokenizer based on the model ID in the config
-##    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
-##    tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
-    # 4-bit quantization to fit large models in 11GB
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        # 1080Ti does not support bf16
-        bnb_4bit_compute_dtype=torch.float16,
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        configs.model_id,
-        quantization_config=bnb_config,
-        device_map=None
-    )
+    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
-
     # Make all sequences in a batch the same length to stack them into a tensor
     # Since GPT needs some padding token when training in batches, we reuse the
     # end-of-sequence token which GPT knows
@@ -194,22 +178,6 @@ def main():
             # The input embeddings and lm heads (output layer) are tied in GPT2. So the code below is not necessary
             lm_head = model.lm_head
             lm_head.weight.data[token_id] = lm_head.weight.data[target_id]
-            
-    lora_cfg = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        inference_mode=False,
-        r=8,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
-    )
-    
-    # With multiple GPUs, each process gets its own rank (GPU ID)
-    print(f"Running FSDP on rank = {rank}, world size = {world_size}")
-    model = model.to(rank)
-
-    model = get_peft_model(model, lora_cfg)
-    model.print_trainable_parameters()
 
     if configs.no_thoughts:
         # Disable Coconut-specific logic
@@ -218,15 +186,19 @@ def main():
 
     if configs.coconut:
         # Wrap the model in Coconut class
-        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id, configs)
-        
+        model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
+
     if configs.load_model_path != "None" and not loaded:
         print(model.load_state_dict(saved_weights, strict=False))
-        model.to(rank)
+
+    # With multiple GPUs, each process gets its own rank (GPU ID)
+    print(f"Running FSDP on rank = {rank}, world size = {world_size}")
+    model = model.to(rank)
     
     llama_auto_wrap_policy = functools.partial(
         transformer_auto_wrap_policy,
         transformer_layer_cls={
+            # GPT2Block,       # for GPT2, we don't need to shard layers (it becomes DDP)
             LlamaDecoderLayer  # only shard llama's layers.
         },
     )
@@ -234,36 +206,107 @@ def main():
     if configs.bf16:
         model.to(torch.bfloat16)
         
-    # choose parallel wrapper: FSDP incompatible with bitsandbytes 4-bit params (uint8)
-    has_uint8 = any(p.dtype == torch.uint8 for p in model.parameters())
+    # if only eval, use ddp (to avoid bugs in fsdp)
+    if configs.only_eval:
+        parallel_model = DDP(model, device_ids=[rank])
 
-    if configs.only_eval or has_uint8:
-        # Use DDP for evaluation or when quantized params (bnb) are present
-        if rank == 0:
-            print(f"Using DDP (only_eval={configs.only_eval}, has_uint8={has_uint8})")
-
-        # Check if anything remained on CPU
-        for n, p in model.named_parameters():
-            if p.device.type == "cpu":
-                print("CPU PARAM:", n)
-                p.data = p.data.to(rank)
-                
-        # separates frozen and trainable parameters for LoRA
-        parallel_model = DDP(model, device_ids=[rank],find_unused_parameters=True)
     else:
-        # Safe to use FSDP when no uint8/quantized params exist
-        parallel_model = FSDP(
-            model,
-            auto_wrap_policy=llama_auto_wrap_policy,
-            device_id=rank,
-            use_orig_params=True,
-        )
+        # CoconutLearnableLora mixes frozen base parameters (requires_grad=False)
+        # with LoRA parameters (requires_grad=True) in the same module
+        # FSDP cannot flatten such heterogeneous tensors -> use_orig_params=True
+##        parallel_model = FSDP(
+##            model,auto_wrap_policy=llama_auto_wrap_policy,device_id=rank,
+##        )
+
+        # Only the parameters that contain "lora_" and the latent_module should be trainable
+        for name, param in model.base_causallm.named_parameters():
+            if "lora_" not in name:
+                param.requires_grad = False
+
+        # The latent_module must exist (inside CoconutLearnableLora.__init__)
+        # and hold only trainable params (latent weights)
+        assert hasattr(model, "latent_module"), "model.latent_module missing — add latent_module to CoconutLearnableLora"
+
+        # Collect parent module names owning the trainable params
+        trainable_parents = set()
+        for pname, p in model.base_causallm.named_parameters():
+            if p.requires_grad:
+                # top-level param => parent ""
+                parent = pname.rsplit(".", 1)[0] if "." in pname else ""
+                trainable_parents.add(parent)
+
+        # helper to get module by dotted name
+        def get_module_by_name(root, module_name):
+            if module_name == "":
+                return root
+            cur = root
+            for part in module_name.split("."):
+                cur = getattr(cur, part)
+            return cur
+        
+        # threshold: only wrap modules smaller than this (in params) to avoid OOM
+        SMALL_MODULE_PARAM_THRESHOLD = 10_000_000
+
+        modules_to_wrap = []
+        for parent_name in trainable_parents:
+            mod = get_module_by_name(model.base_causallm, parent_name)
+            # count all params under this module
+            total_params = sum(p.numel() for p in mod.parameters(recurse=True))
+            # if module is small (likely just LoRA adapters), wrap it
+            if total_params <= SMALL_MODULE_PARAM_THRESHOLD:
+                modules_to_wrap.append((parent_name, mod))
+            else:
+                # descend one level and pick small children that are fully trainable
+                for child_name, child_mod in mod.named_children():
+                    # only wrap child modules that have at least one trainable param and all direct params are trainable
+                    child_params = list(child_mod.parameters(recurse=True))
+                    if not child_params:
+                        continue
+                    # require that at least one param is trainable and all trainable params are a subset (avoid mixing)
+                    has_trainable = any(p.requires_grad for p in child_params)
+                    has_frozen = any(not p.requires_grad for p in child_params)
+                    child_total = sum(p.numel() for p in child_params)
+                    if has_trainable and not has_frozen and child_total <= SMALL_MODULE_PARAM_THRESHOLD:
+                        full_name = f"{parent_name}.{child_name}" if parent_name else child_name
+                        modules_to_wrap.append((full_name, child_mod))
+        # deduplicate by object id (avoid wrapping twice)
+        unique = {}
+        for n, m in modules_to_wrap:
+            unique[id(m)] = (n, m)
+        modules_to_wrap = list(unique.values())
+
+        if len(modules_to_wrap) == 0:
+            # Fallback: wrap the entire PEFT model but with CPU offload to reduce GPU memory pressure
+            print("Warning: no small trainable submodules found — falling back to wrapping whole base with CPU offload.")
+            model.base_causallm = FSDP(model.base_causallm, device_id=rank, cpu_offload=CPUOffload(offload_params=True), use_orig_params=True)
+        else:
+            # Wrap each chosen small module with FSDP (cheap)
+            for full_name, mod in modules_to_wrap:
+                wrapped = FSDP(mod, device_id=rank)
+                # assign wrapped module to parent
+                if "." in full_name:
+                    parent_name, child_name = full_name.rsplit(".", 1)
+                    parent = get_module_by_name(model.base_causallm, parent_name)
+                    setattr(parent, child_name, wrapped)
+                else:
+                    # top-level attr on base_causallm
+                    setattr(model.base_causallm, full_name, wrapped)
+
+            # Wrap the tiny latent_module (only contains latent weights)
+            model.latent_module = FSDP(model.latent_module, device_id=rank)
+
+        # expose module attribute so rest of the code expecting parallel_model.module works
+        model.module = model
+        parallel_model = model
+        #----------------------------------
+
 
     # Delete the original model object since it’s now wrapped inside parallel_model
     del model
+    # Don't print wriapped modules; deep recursion
     # Only the first process prints the structure of the wrapped model, so logs don’t get cluttered
-    if rank == 0:
-        print(parallel_model)
+##    if rank == 0:
+##        print(parallel_model)
 
     # Prepare the validation dataset configs.val_path, collect the questions
     question_val = [d["question"] for d in json.load(open(configs.val_path))]
@@ -280,7 +323,7 @@ def main():
     # If training is enabled, also tokenise the training set
     if not configs.only_eval:
         base_dataset_train = get_dataset(
-            configs.train_path, tokenizer, max_size=500 if configs.debug else 100000000
+            configs.train_path, tokenizer, max_size=5000 if configs.debug else 100000000
         )
     # How many tokens the model can generate during evaluation
     if "gsm" in configs.val_path:
@@ -463,7 +506,6 @@ def main():
                 batch = {
                     key: batch[key].to(rank) for key in batch.keys() if key != "idx"
                 }
-                
                 # Run the model on this batch to get outputs
                 outputs = parallel_model(**batch)
 
@@ -479,10 +521,6 @@ def main():
                 if (step + 1) % configs.gradient_accumulation_steps == 0 or step == len(
                     train_dataloader
                 ) - 1:
-                    # Clip gradients: if the total gradient norm exceeds 1.0, scale
-                    # them down to prevent exploding gradients
-                    # prevents large gradient spikes; leaves normal gradients untouched
-                    torch.nn.utils.clip_grad_norm_(parallel_model.parameters(), max_norm=1.0)
                     # Update weights
                     optimizer.step()
                     # Reset gradients and update the progress bar

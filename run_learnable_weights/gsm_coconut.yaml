@@ -1,6 +1,6 @@
-project: coconut_learnable
-name: gsm-coconut_learnable
-save_path: exps/gsm_coconut_learnable
+project: coconut_learnable_full
+name: gsm-coconut_learnable_full
+save_path: exps/gsm_coconut_learnable_full
 
 only_eval: False
 
@@ -19,8 +19,8 @@ pad_latent_to_max: True
 save_only_improve: False
 uniform_prob: 0.0
 
-model_id: EleutherAI/gpt-neo-1.3B
-load_model_path: None
+model_id: openai-community/gpt2
+load_model_path: exps/gsm_cot_learnable_full/gsm-cot_learnable_full/checkpoint_17
 
 seed: 0
 resume: 0
@@ -29,7 +29,7 @@ train_path: data/gsm_train.json
 val_path: data/gsm_valid.json
 reset_optimizer: True
 
-batch_size_training: 4
+batch_size_training: 8
 debug: False
 gradient_accumulation_steps: 4
 
