@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-12-29
+# Last update: Lucia Licakova, 2025-12-31
 # Adapted for Lora and GPT-Neo
 
 import torch
@@ -175,7 +175,7 @@ class CoconutLearnableLora(nn.Module):
 
             # Ensure weights are on the right device
 ##            weights = self.latent_weights.to(inputs_embeds.device)
-            weights = self.latent_module.latent_weights.to(inputs_embeds.device)
+            weights = self.latent_module.latent_weights
             # Replace each latent token position's embedding with
             # a weighted combination of the last n_tokens hidden states
             for idx_pair in filling_indices:
@@ -193,12 +193,18 @@ class CoconutLearnableLora(nn.Module):
                 ]
 
                 # how many weights we use (even if fewer tokens are available)
-                raw = weights[-n_tokens:]
+##                raw = weights[-n_tokens:]
+                # Select the last n_tokens entries WITHOUT creating a view
+                start_idx = weights.size(0) - n_tokens
+                idx_range = torch.arange(start_idx, weights.size(0), device=weights.device)
+                raw = torch.index_select(weights, 0, idx_range)
                 # normalise them so they sum up to 1
                 w = torch.softmax(raw, dim=0)
                 # Reshape the 1D weight vector to (n_tokens, 1), multiply the hidden states element-wise
                 # Sum accross the n_tokens dimension, return a weighted combination of the previous hidden states
-                weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
+                # Use unsqueeze instead of view to avoid possible view issues
+##                weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
+                weighted_hidden = (hidden_slice * w.unsqueeze(1)).sum(dim=0)
                 
                 tensor_list[batch_idx][token_idx] = weighted_hidden
 
@@ -227,7 +233,7 @@ class CoconutLearnableLora(nn.Module):
         )
         logits.append(outputs.logits)
         # for consistency
-        kv_cache = outputs.past_key_values ##################################
+        kv_cache = outputs.past_key_values
 
         
         # Perform max_n_latents + 1 forward passes:

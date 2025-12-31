@@ -1,0 +1,30 @@
+GSM CoT Full CoconutLearnableFull
+--- Extracting from: log1.txt ---
+1. 2025-12-28 15:20:55 Accuracy on validation set: 120 / 500 = 0.24
+2. 2025-12-28 16:47:42 Accuracy on validation set: 164 / 500 = 0.328
+3. 2025-12-28 18:14:40 Accuracy on validation set: 193 / 500 = 0.386
+4. 2025-12-28 19:41:58 Accuracy on validation set: 191 / 500 = 0.382
+5. 2025-12-28 21:08:47 Accuracy on validation set: 207 / 500 = 0.414
+6. 2025-12-28 22:35:31 Accuracy on validation set: 204 / 500 = 0.408
+7. 2025-12-29 00:01:59 Accuracy on validation set: 210 / 500 = 0.42
+8. 2025-12-29 01:28:36 Accuracy on validation set: 208 / 500 = 0.416
+9. 2025-12-29 02:55:37 Accuracy on validation set: 206 / 500 = 0.412
+10. 2025-12-29 04:22:46 Accuracy on validation set: 219 / 500 = 0.438
+11. 2025-12-29 05:57:07 Accuracy on validation set: 216 / 500 = 0.432
+12. 2025-12-29 07:24:00 Accuracy on validation set: 216 / 500 = 0.432
+13. 2025-12-29 08:50:37 Accuracy on validation set: 225 / 500 = 0.45
+14. 2025-12-29 10:17:09 Accuracy on validation set: 216 / 500 = 0.432
+15. 2025-12-29 11:43:48 Accuracy on validation set: 210 / 500 = 0.42
+16. 2025-12-29 13:10:48 Accuracy on validation set: 232 / 500 = 0.464
+17. 2025-12-29 14:37:50 Accuracy on validation set: 216 / 500 = 0.432
+18. 2025-12-29 16:04:50 Accuracy on validation set: 229 / 500 = 0.458
+19. 2025-12-29 17:31:38 Accuracy on validation set: 220 / 500 = 0.44
+20. 2025-12-29 18:58:12 Accuracy on validation set: 224 / 500 = 0.448
+21. 2025-12-29 20:24:40 Accuracy on validation set: 218 / 500 = 0.436
+22. 2025-12-29 21:51:14 Accuracy on validation set: 211 / 500 = 0.422
+23. 2025-12-29 23:18:04 Accuracy on validation set: 219 / 500 = 0.438
+24. 2025-12-30 00:45:05 Accuracy on validation set: 227 / 500 = 0.454
+
+--- Extracting from: log.txt ---
+24. 2025-12-30 06:34:42 Accuracy on validation set: 215 / 500 = 0.43
+25. 2025-12-30 08:01:09 Accuracy on validation set: 212 / 500 = 0.424

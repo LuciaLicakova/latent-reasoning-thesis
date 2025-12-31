@@ -20,10 +20,10 @@ save_only_improve: False
 uniform_prob: 0.0
 
 model_id: openai-community/gpt2
-load_model_path: exps/gsm_cot_learnable_full/gsm-cot_learnable_full/checkpoint_17
+load_model_path: exps/gsm_cot_learnable_full/gsm-cot_learnable_full/checkpoint_5
 
 seed: 0
-resume: 0
+resume: 5
 bf16: false
 train_path: data/gsm_train.json
 val_path: data/gsm_valid.json
