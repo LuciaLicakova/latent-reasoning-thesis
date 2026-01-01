@@ -60,7 +60,6 @@ class CoconutLearnableLora(nn.Module):
         # detect device from provided base model parameters
         device = next(self.base_causallm.parameters()).device
         # register the tensor as a learnable model parameter
-##        self.latent_weights = nn.Parameter(torch.zeros(self.latent_window_size, device=device))
         # create a tiny module to hold latent weights so we can wrap it with FSDP separately
         class _LatentModule(nn.Module):
             def __init__(self, size, device):
@@ -68,6 +67,13 @@ class CoconutLearnableLora(nn.Module):
                 self.latent_weights = nn.Parameter(torch.zeros(size, device=device))
 
         self.latent_module = _LatentModule(self.latent_window_size, device)
+        # assert the sizes
+        if self.latent_module.latent_weights.size(0) != self.latent_window_size:
+            raise RuntimeError(
+                f"latent window mismatch: latent_window_size={self.latent_window_size} "
+                f"but latent_module.latent_weights.shape[0]={self.latent_module.latent_weights.size(0)}"
+            )
+
 
         if isinstance(self.base_causallm, GPT2LMHeadModel):
             # GPT's architecture in Hugging Face is slightly different
@@ -149,7 +155,6 @@ class CoconutLearnableLora(nn.Module):
             )
             # The final-layer hidden states will replace latent token embeddings in the next step
             hidden_states = outputs.hidden_states[-1]  
-##            kv_cache = outputs.past_key_values
 
             # Feedback the continuous thoughts to the input_embeds
 
@@ -174,15 +179,14 @@ class CoconutLearnableLora(nn.Module):
             ]
 
             # Ensure weights are on the right device
-##            weights = self.latent_weights.to(inputs_embeds.device)
-            weights = self.latent_module.latent_weights
+            weights = self.latent_module.latent_weights.clone()
             # Replace each latent token position's embedding with
             # a weighted combination of the last n_tokens hidden states
             for idx_pair in filling_indices:
                 batch_idx, token_idx = idx_pair
                 local_token_idx = token_idx - hidden_states_offset
                 # Determine how many previous tokens are available
-                n_tokens = min(self.latent_window_size, local_token_idx)
+                n_tokens = min(self.latent_window_size, local_token_idx, weights.size(0))
                 if n_tokens <= 0:
                     continue
 
@@ -193,17 +197,13 @@ class CoconutLearnableLora(nn.Module):
                 ]
 
                 # how many weights we use (even if fewer tokens are available)
-##                raw = weights[-n_tokens:]
                 # Select the last n_tokens entries WITHOUT creating a view
-                start_idx = weights.size(0) - n_tokens
-                idx_range = torch.arange(start_idx, weights.size(0), device=weights.device)
-                raw = torch.index_select(weights, 0, idx_range)
+                raw = weights[-n_tokens:].clone()
                 # normalise them so they sum up to 1
                 w = torch.softmax(raw, dim=0)
                 # Reshape the 1D weight vector to (n_tokens, 1), multiply the hidden states element-wise
                 # Sum accross the n_tokens dimension, return a weighted combination of the previous hidden states
                 # Use unsqueeze instead of view to avoid possible view issues
-##                weighted_hidden = (hidden_slice * w.view(-1, 1)).sum(dim=0)
                 weighted_hidden = (hidden_slice * w.unsqueeze(1)).sum(dim=0)
                 
                 tensor_list[batch_idx][token_idx] = weighted_hidden

@@ -10,7 +10,7 @@ no_thoughts: False
 no_cot: False
 latent_variant: learnable_weights_lora
 
-latent_window_size: 4
+latent_window_size: 3
 c_thought: 1
 epochs_per_stage: 5
 max_latent_stage: 6
@@ -30,7 +30,7 @@ val_path: data/prosqa_valid.json
 reset_optimizer: True
 
 batch_size_training: 1
-debug: True
+debug: False
 gradient_accumulation_steps: 6
 num_epochs: 50
 lr: !!float "1e-5"
