@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Using GPT-2, no LoRA.
+# Adapted for LoRA and GPT-Neo.
 # Last update: Lucia Licakova, 2025-12-29
 
 import torch
@@ -17,7 +17,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-from torch.distributed.fsdp import CPUOffload
+from torch.distributed.fsdp import CPUOffload, StateDictType, FullStateDictConfig
 
 from dataset import (
     get_dataset,
@@ -74,7 +74,10 @@ def main():
     elif configs.latent_variant == "mlp_projection_lora":
         from coconutLora import CoconutMLPLora as CoconutClass
     else:
-        from coconutLora import Coconut as CoconutClass
+        raise ValueError(
+            f"Invalid latent_variant: '{configs.latent_variant}'. "
+            "The latent variant must be one of ['learnable_weights_lora', 'mlp_projection_lora']"
+        )
 
     print(f"Using Coconut variant: {CoconutClass}")
 
@@ -554,10 +557,9 @@ def main():
             ):
                 # Extract model weights
                 states = parallel_model.state_dict()
+                
                 if rank == 0:
-                    torch.save(
-                        states, os.path.join(save_dir, f"checkpoint_{epoch + 1}")
-                    )
+                    torch.save(states, os.path.join(save_dir, f"checkpoint_{epoch + 1}"))
                     print("saving model.")
 
                 if torch.distributed.is_initialized():
@@ -704,7 +706,7 @@ def main():
             and not configs.debug
             and not configs.only_eval
         ):
-            states = parallel_model.state_dict()
+            states = parallel_model.state_dict()            
 
             if rank == 0:
                 torch.save(states, os.path.join(save_dir, f"checkpoint_{epoch + 1}"))
