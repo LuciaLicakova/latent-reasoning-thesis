@@ -1,7 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 # Adapted for LoRA and GPT-Neo.
-# Last update: Lucia Licakova, 2025-12-29
+# Last update: Lucia Licakova, 2025-01-03
 
 import torch
 import torch.distributed
@@ -326,7 +326,7 @@ def main():
     # If training is enabled, also tokenise the training set
     if not configs.only_eval:
         base_dataset_train = get_dataset(
-            configs.train_path, tokenizer, max_size=5000 if configs.debug else 100000000
+            configs.train_path, tokenizer, max_size=500 if configs.debug else 100000000
         )
     # How many tokens the model can generate during evaluation
     if "gsm" in configs.val_path:
@@ -552,7 +552,7 @@ def main():
             # During training and not in debug mode
             if (
                 not configs.save_only_improve
-                and not configs.debug
+##                and not configs.debug
                 and not configs.only_eval
             ):
                 # Extract model weights
@@ -703,7 +703,7 @@ def main():
         if (
             cor / total > best_acc
             and configs.save_only_improve
-            and not configs.debug
+##            and not configs.debug
             and not configs.only_eval
         ):
             states = parallel_model.state_dict()            
@@ -723,4 +723,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()
