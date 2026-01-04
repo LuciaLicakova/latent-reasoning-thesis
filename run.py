@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Adapted for LoRA and GPT-Neo.
+# Adapted for LoRA, GPT-Neo
 # Last update: Lucia Licakova, 2025-01-03
 
 import torch
@@ -17,7 +17,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-from torch.distributed.fsdp import CPUOffload, StateDictType, FullStateDictConfig
+from peft import PeftModel
+##from torch.distributed.fsdp import CPUOffload
 
 from dataset import (
     get_dataset,
@@ -118,7 +119,7 @@ def main():
             f"Loading from {configs.load_model_path} and skip the first {configs.resume} epochs"
         )
 
-    # Load a Hugging Face model and tokenizer based on the model ID in the config
+    # Load the Hugging Face base model first
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     # Make all sequences in a batch the same length to stack them into a tensor
@@ -134,37 +135,37 @@ def main():
     start_id = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     end_id = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
-    loaded = False
+##    loaded = False
 
     # Load the model using pytorch
-    if configs.load_model_path != "None":
-        saved_weights = torch.load(configs.load_model_path, map_location=torch.device(rank))
-
-        # Coconut mode, but checkpoint contains no Coconut model
-        if configs.coconut and not any(
-            [k.startswith("base_causallm") for k in saved_weights.keys()]
-        ):
-            # Loading a base model into coconut model
-            # e.g., for GSM8k, we used a SFTed model to skip the stage 0
-            loaded = True
-            # Load the weights from the checkpoint into the model
-            print(model.load_state_dict(saved_weights, strict=False))
-        # No Coconut mode but the checkpoint contains Coconut model
-        elif not configs.coconut and any(
-            [k.startswith("base_causallm") for k in saved_weights.keys()]
-        ):
-            raise ValueError("Cannot load coconut model weights into a causallm model")
-        # Coconut mode and Coconut model saved in the checkpoint
-        elif configs.coconut and any(
-            [k.startswith("base_causallm") for k in saved_weights.keys()]
-        ):
-            # Training was interrupted and resumed but this will be handled later
-            pass
-
-        else:
-            # Resume or evaluate a supervised fine-tuned model
-            loaded = True
-            print(model.load_state_dict(saved_weights, strict=False))
+##    if configs.load_model_path != "None":
+##        saved_weights = torch.load(configs.load_model_path, map_location=torch.device(rank))
+##
+##        # Coconut mode, but checkpoint contains no Coconut model
+##        if configs.coconut and not any(
+##            [k.startswith("base_causallm") for k in saved_weights.keys()]
+##        ):
+##            # Loading a base model into coconut model
+##            # e.g., for GSM8k, we used a SFTed model to skip the stage 0
+##            loaded = True
+##            # Load the weights from the checkpoint into the model
+##            print(model.load_state_dict(saved_weights, strict=False))
+##        # No Coconut mode but the checkpoint contains Coconut model
+##        elif not configs.coconut and any(
+##            [k.startswith("base_causallm") for k in saved_weights.keys()]
+##        ):
+##            raise ValueError("Cannot load coconut model weights into a causallm model")
+##        # Coconut mode and Coconut model saved in the checkpoint
+##        elif configs.coconut and any(
+##            [k.startswith("base_causallm") for k in saved_weights.keys()]
+##        ):
+##            # Training was interrupted and resumed but this will be handled later
+##            pass
+##
+##        else:
+##            # Resume or evaluate a supervised fine-tuned model
+##            loaded = True
+##            print(model.load_state_dict(saved_weights, strict=False))
 
     # In this case the model needs extra tokens
     if not (configs.cot or configs.no_thoughts or configs.no_cot):
@@ -190,9 +191,32 @@ def main():
     if configs.coconut:
         # Wrap the model in Coconut class
         model = CoconutClass(model, latent_id, start_id, end_id, tokenizer.eos_token_id)
+        if configs.load_model_path != "None":
+            peft_dir = os.path.join(configs.load_model_path, "peft")
+            latent_path = os.path.join(configs.load_model_path, "latent.pt")
 
-    if configs.load_model_path != "None" and not loaded:
-        print(model.load_state_dict(saved_weights, strict=False))
+            if os.path.isdir(peft_dir):
+                # fresh run: wrap LoRA
+                if not isinstance(model.base_causallm, PeftModel):
+                    model.base_causallm = PeftModel.from_pretrained(
+                        model.base_causallm, peft_dir
+                    )
+                    print(f"Loaded and wrapped LoRA adapters from {peft_dir}")
+                # already wrapped; only load adapters
+                else:
+                    model.base_causallm.load_adapter(peft_dir, adapter_name="default")
+                    print(f"Loaded LoRA adapters from {peft_dir}")
+
+                
+            # learnable weights are saved separately
+            if os.path.exists(latent_path):
+                model.latent_module.load_state_dict(
+                    torch.load(latent_path, map_location="cpu")
+                )
+                print(f"Loaded latent module from {latent_path}")
+
+##    if configs.load_model_path != "None" and not loaded:
+##        print(model.load_state_dict(saved_weights, strict=False))
 
     # With multiple GPUs, each process gets its own rank (GPU ID)
     print(f"Running FSDP on rank = {rank}, world size = {world_size}")
@@ -220,96 +244,19 @@ def main():
 ##        parallel_model = FSDP(
 ##            model,auto_wrap_policy=llama_auto_wrap_policy,device_id=rank,
 ##        )
-
-        # Only the parameters that contain "lora_" and the latent_module should be trainable
+        # Freeze base model except LoRA
         for name, param in model.base_causallm.named_parameters():
-            if "lora_" not in name:
-                param.requires_grad = False
+            param.requires_grad = ("lora_" in name)
 
-        # The latent_module must exist (inside CoconutLearnableLora.__init__)
-        # and hold only trainable params (latent weights)
-        assert hasattr(model, "latent_module"), "model.latent_module missing — add latent_module to CoconutLearnableLora"
-
-        # Collect parent module names owning the trainable params
-        trainable_parents = set()
-        for pname, p in model.base_causallm.named_parameters():
-            if p.requires_grad:
-                # top-level param => parent ""
-                parent = pname.rsplit(".", 1)[0] if "." in pname else ""
-                trainable_parents.add(parent)
-
-        # helper to get module by dotted name
-        def get_module_by_name(root, module_name):
-            if module_name == "":
-                return root
-            cur = root
-            for part in module_name.split("."):
-                cur = getattr(cur, part)
-            return cur
-        
-        # threshold: only wrap modules smaller than this (in params) to avoid OOM
-        SMALL_MODULE_PARAM_THRESHOLD = 10_000_000
-
-        modules_to_wrap = []
-        for parent_name in trainable_parents:
-            mod = get_module_by_name(model.base_causallm, parent_name)
-            # count all params under this module
-            total_params = sum(p.numel() for p in mod.parameters(recurse=True))
-            # if module is small (likely just LoRA adapters), wrap it
-            if total_params <= SMALL_MODULE_PARAM_THRESHOLD:
-                modules_to_wrap.append((parent_name, mod))
-            else:
-                # descend one level and pick small children that are fully trainable
-                for child_name, child_mod in mod.named_children():
-                    # only wrap child modules that have at least one trainable param and all direct params are trainable
-                    child_params = list(child_mod.parameters(recurse=True))
-                    if not child_params:
-                        continue
-                    # require that at least one param is trainable and all trainable params are a subset (avoid mixing)
-                    has_trainable = any(p.requires_grad for p in child_params)
-                    has_frozen = any(not p.requires_grad for p in child_params)
-                    child_total = sum(p.numel() for p in child_params)
-                    if has_trainable and not has_frozen and child_total <= SMALL_MODULE_PARAM_THRESHOLD:
-                        full_name = f"{parent_name}.{child_name}" if parent_name else child_name
-                        modules_to_wrap.append((full_name, child_mod))
-        # deduplicate by object id (avoid wrapping twice)
-        unique = {}
-        for n, m in modules_to_wrap:
-            unique[id(m)] = (n, m)
-        modules_to_wrap = list(unique.values())
-
-        if len(modules_to_wrap) == 0:
-            # Fallback: wrap the entire PEFT model but with CPU offload to reduce GPU memory pressure
-            print("Warning: no small trainable submodules found — falling back to wrapping whole base with CPU offload.")
-            model.base_causallm = FSDP(model.base_causallm, device_id=rank, cpu_offload=CPUOffload(offload_params=True), use_orig_params=True)
-        else:
-            # Wrap each chosen small module with FSDP (cheap)
-            for full_name, mod in modules_to_wrap:
-                wrapped = FSDP(mod, device_id=rank)
-                # assign wrapped module to parent
-                if "." in full_name:
-                    parent_name, child_name = full_name.rsplit(".", 1)
-                    parent = get_module_by_name(model.base_causallm, parent_name)
-                    setattr(parent, child_name, wrapped)
-                else:
-                    # top-level attr on base_causallm
-                    setattr(model.base_causallm, full_name, wrapped)
-
-            # Wrap the tiny latent_module (only contains latent weights)
-            model.latent_module = FSDP(model.latent_module, device_id=rank)
-
-        # expose module attribute so rest of the code expecting parallel_model.module works
-        model.module = model
-        parallel_model = model
+        # latent_module stays trainable
+        assert hasattr(model, "latent_module")
+        # base parameters are frozen
+        parallel_model = DDP(model,device_ids=[rank],find_unused_parameters=True)
         #----------------------------------
 
 
     # Delete the original model object since it’s now wrapped inside parallel_model
     del model
-    # Don't print wriapped modules; deep recursion
-    # Only the first process prints the structure of the wrapped model, so logs don’t get cluttered
-##    if rank == 0:
-##        print(parallel_model)
 
     # Prepare the validation dataset configs.val_path, collect the questions
     question_val = [d["question"] for d in json.load(open(configs.val_path))]
@@ -321,12 +268,12 @@ def main():
     cot_val = ["\n".join(d["steps"]) for d in json.load(open(configs.val_path))]
     # Tokenise the validation set using the model’s tokenizer
     base_dataset_valid = get_dataset(
-        configs.val_path, tokenizer, max_size=32 if configs.debug else 100000000
+        configs.val_path, tokenizer, max_size=10 if configs.debug else 100000000
     )
     # If training is enabled, also tokenise the training set
     if not configs.only_eval:
         base_dataset_train = get_dataset(
-            configs.train_path, tokenizer, max_size=500 if configs.debug else 100000000
+            configs.train_path, tokenizer, max_size=250 if configs.debug else 100000000
         )
     # How many tokens the model can generate during evaluation
     if "gsm" in configs.val_path:
@@ -509,6 +456,9 @@ def main():
                 batch = {
                     key: batch[key].to(rank) for key in batch.keys() if key != "idx"
                 }
+                # DEBUG
+                torch.cuda.reset_peak_memory_stats(rank)
+                #---------------------------------------
                 # Run the model on this batch to get outputs
                 outputs = parallel_model(**batch)
 
@@ -519,6 +469,10 @@ def main():
                 loss = outputs.loss / configs.gradient_accumulation_steps
                 # Compute gradients
                 loss.backward()
+                # DEBUG
+                if rank == 0:
+                    print("peak MB:",torch.cuda.max_memory_allocated(rank) / 1024**2)
+                #---------------------------------------
 
                 # Only update the model after enough steps to match the real batch size
                 if (step + 1) % configs.gradient_accumulation_steps == 0 or step == len(
@@ -549,25 +503,42 @@ def main():
             if torch.distributed.is_initialized():
                 # If distributed training is active, ensure all processes wait until everyone reaches this point
                 dist.barrier()
-            # During training and not in debug mode
+            # During training
             if (
                 not configs.save_only_improve
-##                and not configs.debug
                 and not configs.only_eval
             ):
                 # Extract model weights
-                states = parallel_model.state_dict()
-                
+##                states = parallel_model.state_dict()
+##                if rank == 0:
+##                    torch.save(
+##                        states, os.path.join(save_dir, f"checkpoint_{epoch + 1}")
+##                    )
+##                    print("saving model.")
                 if rank == 0:
-                    torch.save(states, os.path.join(save_dir, f"checkpoint_{epoch + 1}"))
+                    ckpt_dir = os.path.join(save_dir, f"checkpoint_{epoch + 1}")
+                    os.makedirs(ckpt_dir, exist_ok=True)
+
+                    # save LoRA adapters
+                    parallel_model.module.base_causallm.save_pretrained(
+                        os.path.join(ckpt_dir, "peft")
+                    )
+
+                    # save latent module
+                    torch.save(
+                        parallel_model.module.latent_module.state_dict(),
+                        os.path.join(ckpt_dir, "latent.pt"),
+                    )
+
                     print("saving model.")
+
 
                 if torch.distributed.is_initialized():
                     dist.barrier()
                 # Cleanup and garbage collection
-                del states
-                gc.collect()
-                torch.cuda.empty_cache()
+##                del states
+##                gc.collect()
+##                torch.cuda.empty_cache()
 
             # Validation loss
             total_loss = 0
@@ -703,24 +674,38 @@ def main():
         if (
             cor / total > best_acc
             and configs.save_only_improve
-##            and not configs.debug
             and not configs.only_eval
         ):
-            states = parallel_model.state_dict()            
-
+##            states = parallel_model.state_dict()
+##
+##            if rank == 0:
+##                torch.save(states, os.path.join(save_dir, f"checkpoint_{epoch + 1}"))
+##                print("saving model.")
             if rank == 0:
-                torch.save(states, os.path.join(save_dir, f"checkpoint_{epoch + 1}"))
+                ckpt_dir = os.path.join(save_dir, f"checkpoint_{epoch + 1}")
+                os.makedirs(ckpt_dir, exist_ok=True)
+
+                parallel_model.module.base_causallm.save_pretrained(
+                    os.path.join(ckpt_dir, "peft")
+                )
+
+                torch.save(
+                    parallel_model.module.latent_module.state_dict(),
+                    os.path.join(ckpt_dir, "latent.pt"),
+                )
+
                 print("saving model.")
+
 
             best_acc = cor / total
 
             if torch.distributed.is_initialized():
                 dist.barrier()
             # Cleanup
-            del states
-            gc.collect()
-            torch.cuda.empty_cache()
+##            del states
+##            gc.collect()
+##            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
-    main()
+    main()
