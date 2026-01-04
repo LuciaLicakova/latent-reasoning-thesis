@@ -469,10 +469,6 @@ def main():
                 loss = outputs.loss / configs.gradient_accumulation_steps
                 # Compute gradients
                 loss.backward()
-                # DEBUG
-                if rank == 0:
-                    print("peak MB:",torch.cuda.max_memory_allocated(rank) / 1024**2)
-                #---------------------------------------
 
                 # Only update the model after enough steps to match the real batch size
                 if (step + 1) % configs.gradient_accumulation_steps == 0 or step == len(
@@ -497,6 +493,7 @@ def main():
                 pbar.set_description(
                     f"Training Epoch: {epoch+1}/{configs.num_epochs}, batch {step}/{len(train_dataloader)} "
                     f"completed (loss: {round(float(loss.detach().float() * configs.gradient_accumulation_steps), 4)}"
+                    f"Peak MB: {torch.cuda.max_memory_allocated(rank) / 1024**2}"
                 )
             pbar.close()
             # Wrap for safety in case of CPU
@@ -537,8 +534,8 @@ def main():
                     dist.barrier()
                 # Cleanup and garbage collection
 ##                del states
-##                gc.collect()
-##                torch.cuda.empty_cache()
+                gc.collect()
+                torch.cuda.empty_cache()
 
             # Validation loss
             total_loss = 0
@@ -703,8 +700,8 @@ def main():
                 dist.barrier()
             # Cleanup
 ##            del states
-##            gc.collect()
-##            torch.cuda.empty_cache()
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
