@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-09-05
+# Last update: Lucia Licakova, 2026-01-06
 
 import json
 import itertools
@@ -16,6 +16,9 @@ from transformers.data.data_collator import pad_without_fast_tokenizer_warning
 
 
 def get_dataset(path, tokenizer, max_size=1000000000):
+    # maximum sequence length (1024 for GPT-2)
+    max_len = tokenizer.model_max_length
+##    print(f"path: {path}")
 
     def tokenize_sample(sample):
         '''Example sample:
@@ -36,15 +39,24 @@ def get_dataset(path, tokenizer, max_size=1000000000):
         answer_tokenized = tokenizer.encode(
             "### " + sample["answer"], add_special_tokens=False
         ) + [tokenizer.eos_token_id]
+        
+        total_len = (
+            len(question_tokenized)
+            + sum(len(s) for s in steps_tokenized)
+            + len(answer_tokenized)
+        )
 
+        # in MATH dataset drop samples that exceed max length
+        drop = ("math" in path and total_len > max_len)
         sample = {
             # List of token IDs
-            "question_tokenized": question_tokenized,
+            "question_tokenized": [] if drop else question_tokenized,
             # List of lists of integers (token IDs), one list per step
-            "steps_tokenized": steps_tokenized,
+            "steps_tokenized": [] if drop else steps_tokenized,
             # List of token IDs with EOS at the end
-            "answer_tokenized": answer_tokenized,
+            "answer_tokenized": [] if drop else answer_tokenized,
             "idx": sample["idx"],
+            "drop": drop,
         }
         return sample
 
@@ -61,35 +73,46 @@ def get_dataset(path, tokenizer, max_size=1000000000):
     if dist.is_initialized() and torch.cuda.device_count() > 1:
         rank = dist.get_rank()
         if rank == 0:
-            processed_dataset = [
-                dataset.map(
-                    tokenize_sample, remove_columns=list(dataset.features), num_proc=32
-                )
-            ]
+            processed_dataset = dataset.map(
+                tokenize_sample, remove_columns=list(dataset.features), num_proc=32
+            )
+            # drop too long samples
+            processed_dataset = processed_dataset.filter(lambda x: not x["drop"])
+            processed_dataset = processed_dataset.remove_columns(["drop"])
+            # list for broadcast_object_list
+            processed_dataset = [processed_dataset]
         else:
             processed_dataset = [None]
         dist.broadcast_object_list(processed_dataset, src=0)
         dataset = processed_dataset[0]
     else:
-        # Single GPU / CPU: save resources with num_proc=4
         dataset = dataset.map(
             # Remove the original fields (question, steps, answer) so only tokenized fields remain
             tokenize_sample, remove_columns=list(dataset.features), num_proc=4
         )
+        # drop samples which exceed max length
+        dataset = dataset.filter(lambda x: not x["drop"])
+        dataset = dataset.remove_columns(["drop"])
+
 
     # Verify that tokenizing the question, steps, and answer separately matches
-    # the result of tokenizing the whole text at once
-    d = data[0]
-    complete = d["question"] + "\n" + "\n".join(d["steps"]) + "\n### " + d["answer"]
-    complete_tokenized = tokenizer.encode(complete, add_special_tokens=True) + [
-        tokenizer.eos_token_id
-    ]
-    assert (
-        complete_tokenized
-        == dataset[0]["question_tokenized"]
-        + list(itertools.chain.from_iterable(dataset[0]["steps_tokenized"]))
-        + dataset[0]["answer_tokenized"]
-    )
+    # the result of tokenizing the whole text at once    
+    if not "math" in path:
+        # after dropping long samples the assertion no longer makes sense
+        # data[0] is always the first raw JSON example
+        # dataset[0] is the first example that survived filtering
+        # the assertion is skipped for MATH dataset
+        d = data[0]
+        complete = d["question"] + "\n" + "\n".join(d["steps"]) + "\n### " + d["answer"]
+        complete_tokenized = tokenizer.encode(complete, add_special_tokens=True) + [
+            tokenizer.eos_token_id
+        ]
+        assert (
+            complete_tokenized
+            == dataset[0]["question_tokenized"]
+            + list(itertools.chain.from_iterable(dataset[0]["steps_tokenized"]))
+            + dataset[0]["answer_tokenized"]
+        )
 
     return dataset
 

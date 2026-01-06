@@ -1,7 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Adapted for LoRA, GPT-Neo
-# Last update: Lucia Licakova, 2025-01-03
+# Adapted for LoRA, GPT-2
+# Last update: Lucia Licakova, 2025-01-06
 
 import torch
 import torch.distributed
@@ -134,6 +134,10 @@ def main():
     latent_id = tokenizer.convert_tokens_to_ids("<|latent|>")
     start_id = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     end_id = tokenizer.convert_tokens_to_ids("<|end-latent|>")
+##    for name, module in model.named_modules():
+##        if "attn" in name or "attention" in name:
+##            print(name, "->", type(module))
+
 
 ##    loaded = False
 

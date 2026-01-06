@@ -1,7 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Last update: Lucia Licakova, 2025-12-31
-# Adapted for Lora and GPT-Neo
+# Last update: Lucia Licakova, 2025-01-06
+# Adapted for Lora
 
 import torch
 import torch.nn as nn
@@ -30,11 +30,11 @@ class CoconutLearnableLora(nn.Module):
 
         super(CoconutLearnableLora, self).__init__()   
         self.gen_forward_cnt = 0
-        # inject LoRA for GPT-Neo 1.3B
+        # inject LoRA
         lora_config = LoraConfig(
             r=8,
             lora_alpha=16,
-            target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
+            target_modules=["c_attn", "c_proj"],
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
