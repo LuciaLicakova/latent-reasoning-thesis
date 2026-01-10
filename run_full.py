@@ -1,6 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
-# Using GPT-2, no LoRA.
+# Using GPT-2.
 # Last update: Lucia Licakova, 2025-12-28
 
 import torch
@@ -18,7 +18,6 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 
-##from coconut import Coconut
 from dataset import (
     get_dataset,
     get_question_latent_dataset,
@@ -71,8 +70,6 @@ def main():
 
     if configs.latent_variant == "learnable_weights":
         from coconut import CoconutLearnableFull as CoconutClass
-    elif configs.latent_variant == "mlp_projection":
-        from coconut import CoconutMLPFull as CoconutClass
     else:
         from coconut import Coconut as CoconutClass
 
@@ -231,15 +228,15 @@ def main():
     cot_val = ["\n".join(d["steps"]) for d in json.load(open(configs.val_path))]
     # Tokenise the validation set using the model’s tokenizer
     base_dataset_valid = get_dataset(
-        configs.val_path, tokenizer, max_size=32 if configs.debug else 100000000
+        configs.val_path, tokenizer, max_size=16 if configs.debug else 100000000
     )
     # If training is enabled, also tokenise the training set
     if not configs.only_eval:
         base_dataset_train = get_dataset(
-            configs.train_path, tokenizer, max_size=5000 if configs.debug else 100000000
+            configs.train_path, tokenizer, max_size=500 if configs.debug else 100000000
         )
     # How many tokens the model can generate during evaluation
-    if "gsm" in configs.val_path:
+    if ("gsm" in configs.val_path or "math" in configs.val_path):
         max_new_tokens = 64
     else:
         max_new_tokens = 128
@@ -419,6 +416,8 @@ def main():
                 batch = {
                     key: batch[key].to(rank) for key in batch.keys() if key != "idx"
                 }
+                # monitor GPU memory
+                torch.cuda.reset_peak_memory_stats(rank)
                 # Run the model on this batch to get outputs
                 outputs = parallel_model(**batch)
 
@@ -453,6 +452,7 @@ def main():
                 pbar.set_description(
                     f"Training Epoch: {epoch+1}/{configs.num_epochs}, batch {step}/{len(train_dataloader)} "
                     f"completed (loss: {round(float(loss.detach().float() * configs.gradient_accumulation_steps), 4)}"
+                    f"Peak MB: {torch.cuda.max_memory_allocated(rank) / 1024**2}"
                 )
             pbar.close()
             # Wrap for safety in case of CPU

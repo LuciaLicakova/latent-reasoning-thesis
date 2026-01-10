@@ -1,6 +1,6 @@
-project: coconut_learnable
-name: gsm-coconut_learnable-eval
-save_path: exps/gsm_coconut_learnable-eval
+project: coconut_learnable_lora
+name: gsm-coconut_learnable_lora-eval
+save_path: exps/gsm_coconut_learnable_lora-eval
 
 only_eval: True
 
@@ -8,9 +8,8 @@ coconut: True
 cot: False
 no_thoughts: False
 no_cot: False
-latent_variant: learnable_weights
+latent_variant: learnable_weights_lora
 
-latent_window_size: 4
 c_thought: 2
 epochs_per_stage: 3
 max_latent_stage: 3
@@ -20,7 +19,7 @@ save_only_improve: False
 uniform_prob: 0.0
 
 model_id: openai-community/gpt2
-load_model_path: exps/gsm_coconut_learnable/gsm-coconut_learnable/checkpoint_3
+load_model_path: exps/gsm_coconut_learnable_lora/gsm-coconut_learnable_lora/checkpoint_3
 
 seed: 0
 resume: 3

@@ -1,6 +1,6 @@
-project: coconut_learnable_full
-name: gsm-cot_learnable_full
-save_path: exps/gsm_cot_learnable_full
+project: coconut_learnable_lora
+name: gsm-cot_learnable_lora
+save_path: exps/gsm_cot_learnable_lora
 
 only_eval: False
 
@@ -8,7 +8,7 @@ coconut: False
 cot: True
 no_thoughts: False
 no_cot: False
-latent_variant: learnable_weights
+latent_variant: learnable_weights_lora
 
 c_thought: 0
 epochs_per_stage: 1

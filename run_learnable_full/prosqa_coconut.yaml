@@ -10,7 +10,6 @@ no_thoughts: False
 no_cot: False
 latent_variant: learnable_weights
 
-latent_window_size: 4
 c_thought: 1
 epochs_per_stage: 5
 max_latent_stage: 6

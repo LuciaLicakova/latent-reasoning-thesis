@@ -72,8 +72,6 @@ def main():
 
     if configs.latent_variant == "learnable_weights_lora":
         from coconutLora import CoconutLearnableLora as CoconutClass
-    elif configs.latent_variant == "mlp_projection_lora":
-        from coconutLora import CoconutMLPLora as CoconutClass
     else:
         raise ValueError(
             f"Invalid latent_variant: '{configs.latent_variant}'. "

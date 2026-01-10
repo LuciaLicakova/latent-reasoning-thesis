@@ -1,6 +1,6 @@
-project: coconut
-save_path: exps/prontoqa_coconut_cpu
-name: prontoqa-coconut
+project: coconut_learnable_full
+name: prontoqa-coconut_learnable_full
+save_path: exps/prontoqa_coconut_learnable_full
 
 only_eval: False
 
@@ -8,6 +8,7 @@ coconut: True
 cot: False
 no_thoughts: False
 no_cot: False
+latent_variant: learnable_weights
 
 c_thought: 1
 epochs_per_stage: 5
@@ -18,6 +19,7 @@ save_only_improve: False
 uniform_prob: 0.0
 model_id: openai-community/gpt2
 load_model_path: None
+
 seed: 0
 resume: 0
 bf16: False
@@ -25,9 +27,9 @@ train_path: data/prontoqa_train.json
 val_path: data/prontoqa_valid.json
 reset_optimizer: True
 
-batch_size_training: 8
+batch_size_training: 4
 debug: False
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 8
 num_epochs: 50
 lr: 1.0e-4
 weight_decay: 0.01
