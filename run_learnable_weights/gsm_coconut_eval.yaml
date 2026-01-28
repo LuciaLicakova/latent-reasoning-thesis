@@ -19,18 +19,18 @@ save_only_improve: False
 uniform_prob: 0.0
 
 model_id: openai-community/gpt2
-load_model_path: exps/gsm_coconut_learnable_lora/gsm-coconut_learnable_lora/checkpoint_3
+load_model_path: exps/gsm_coconut_learnable_lora/gsm-coconut_learnable_lora/checkpoint_21
 
 seed: 0
-resume: 3
+resume: 21
 bf16: false
 train_path: data/gsm_train.json
 val_path: data/gsm_test.json
 reset_optimizer: True
 
-batch_size_training: 8
+batch_size_training: 1
 debug: False
-gradient_accumulation_steps: 4
+gradient_accumulation_steps: 6
 
 num_epochs: 25
 lr: 1.0e-4
