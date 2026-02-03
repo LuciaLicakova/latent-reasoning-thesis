@@ -1,10 +1,10 @@
-# Coconut and Contextual Latent Reasoning
+# Coconut Extensions: Learnable Latent Windows and LoRA
 
 This repository reproduces and extends the Coconut framework from [Training Large Language Models to Reason in a Continuous Latent Space](https://arxiv.org/abs/2412.06769) by Hao et al. (2024). 
 
-It includes a contextual latent embedding modification, where each latent token is computed as a weighted average of the last *m* hidden states instead of using only the immediately preceding one. 
+It includes a contextual latent embedding modification, where each latent token is computed as a learned aggregation over multiple recent hidden states. Additionally, we apply parameter-efficient fine-tuning via Low-Rank Adaptation to reduce the memory cost of training.
 
-The implementation is optimised for limited hardware (2×11 GB GPUs) through gradient accumulation and reduced batch sizes.
+The implementation is optimised for limited hardware (2×11 GB GPUs) through gradient accumulation and reduced batch sizes, since multi-pass latent reasoning remains the dominant memory bottleneck.
 
 ![coconut](assets/coconut.png)
 
@@ -15,7 +15,8 @@ The implementation is optimised for limited hardware (2×11 GB GPUs) through gra
 The code reproduces the Coconut training pipeline:
 1. **Stage 0, Chain-of-Thought (CoT)**: trains step-by-step reasoning.
 2. **Stage 1+, Latent Reasoning (Coconut)**: learns to reason within a continuous latent space.
-The contextual variant extends the latent reasoning stage by integrating short-range contextual information into the latent embeddings. It aims to improve representation coherence without increasing model parameters or computational complexity.
+The contextual variant extends the latent reasoning stage by integrating short-range contextual information into the latent embeddings in an attempt to improve representation coherence. LoRA-based runs restrict parameter updates to low-rank adapters and can be evaluated for their impact on memory usage and reasoning performance.
+
 ---
 
 ## Installation
@@ -54,16 +55,29 @@ The file should contain a list of data points. Each data point is composed of a 
 - [GSM8K](https://arxiv.org/abs/2110.14168) – numerical reasoning
 - [ProntoQA](https://arxiv.org/pdf/2210.01240) – symbolic reasoning
 - **ProsQA** – procedural reasoning
+- [MATH](https://arxiv.org/abs/2103.03874) – LaTeX-based mathematical reasoning
+
 
 Preprocessing scripts for downloading and using these datasets are provided in the `preprocessing/` directory.
 
 ---
-
 ## Running Experiments
 
 All commands below assume 2 × 11GB GPUs, reflecting the hardware constraints of this reproduction. Adjust `batch_size_training`, `gradient_accumulation_steps`, and `nproc_per_node` to fit your resources. The effective batch size can be preserved across datasets using gradient accumulation.
+This repository enables two training branches:
+1. **Full Fine-Tuning**: supports standard Coconut and the learnable latent-window variant.
+2. **LoRA-Based Fine-Tuning**: for the learnable latent-window variant.
 
-### GSM8K
+### Branch A: Full Fine-Tuning
+
+Configuration files are located in: `run_learnable_full/`. 
+All experiments in this branch use `run_full.py`.
+
+In the YAML configuration, choose the latent update mechanism via:
+- `latent_variant: coconut`: standard Coconut latent update.
+- `latent_variant: learnable_weights`: learnable latent-window aggregation.
+
+#### GSM8K
 
 Preprocess data:
 
@@ -74,19 +88,19 @@ bash preprocessing/gsm_icot.bash
 First train the model with CoT (as the stage 0 training)
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/gsm_cot.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/gsm_cot.yaml
 ```
 
-Select a checkpoint as the initialisation of Coconut (the validation accuracy is expected to be around 40%). Replace the `load_model_path` in the [cpu_args/gsm_coconut.yaml](cpu_args/gsm_coconut.yaml) with your selected checkpoint, and run:
+Select a checkpoint as the initialisation of Coconut (the validation accuracy is expected to be around 40%). Replace the `load_model_path` in the [run_learnable_full/gsm_coconut.yaml](run_learnable_full/gsm_coconut.yaml) with your selected checkpoint, and run:
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/gsm_coconut.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/gsm_coconut.yaml
 ```
 
-Find the checkpoint with best validation accuracy, and put the path as `load_model_path` in [cpu_args/gsm_coconut_eval.yaml](cpu_args/gsm_coconut_eval.yaml). Then evaluate:
+Find the checkpoint with best validation accuracy, and put the path as `load_model_path` in [run_learnable_full/gsm_coconut_eval.yaml](run_learnable_full/gsm_coconut_eval.yaml). Then evaluate:
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/gsm_coconut_eval.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/gsm_coconut_eval.yaml
 ```
 
 ### ProntoQA
@@ -105,13 +119,13 @@ python preprocessing/prontoqa.py
 
 Then run the following to train the model:
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/prontoqa_coconut.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/prontoqa_coconut.yaml
 ```
 
-Find the checkpoint with the best validation accuracy, put the path as `load_model_path` in [args/prosqa_coconut_eval.yaml](args/prosqa_coconut_eval.yaml), and evaluate:
+Find the checkpoint with the best validation accuracy, put the path as `load_model_path` in [run_learnable_full/prosqa_coconut_eval.yaml](run_learnable_full/prosqa_coconut_eval.yaml), and evaluate:
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/prontoqa_coconut_eval.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/prontoqa_coconut_eval.yaml
 ```
 ### ProsQA
 
@@ -119,18 +133,26 @@ The ProsQA dataset is in [data/prosqa_*.json](data).
 
 Run the following to train the model:
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/prosqa_coconut.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/prosqa_coconut.yaml
 ```
 
-Find the checkpoint with the best validation accuracy, put the path as `load_model_path` in [cpu_args/prosqa_coconut_eval.yaml](cpu_args/prosqa_coconut_eval.yaml), and evaluate:
+Find the checkpoint with the best validation accuracy, put the path as `load_model_path` in [run_learnable_full/prosqa_coconut_eval.yaml](run_learnable_full/prosqa_coconut_eval.yaml), and evaluate:
 
 ```bash
-torchrun --nnodes 1 --nproc_per_node 2 run.py cpu_args/prosqa_coconut_eval.yaml
+torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/prosqa_coconut_eval.yaml
 ```
+### Branch B: LoRA-Based Fine-Tuning
+
+Configuration files are located in: `run_learnable_weights/`. 
+All experiments in this branch use `run.py`.
+
+In the YAML configuration, LoRA-based latent reasoning via `latent_variant: learnable_weights_lora`: learnable latent-window aggregation.
+
+Otherwise the execution is analogous to Branch A.
 
 ## Configuration
 
-All experiment settings are defined in YAML files (for example [here](cpu_args/gsm_coconut.yaml)).
+All experiment settings are defined in YAML files (for example [here](run_full.py run_learnable_full/gsm_coconut.yaml)).
 
 - **General settings**
 
@@ -143,6 +165,8 @@ All experiment settings are defined in YAML files (for example [here](cpu_args/g
   - `cot`: Train a chain-of-thought model
   - `no_thoughts`: Train a coconut (w/o thought) model
   - `no_cot`: Train a no-cot model
+  - `latent_variant`: use `basic` for standard Coconut behaviour, `learnable_weights` for full fine-tuning with learnable weights, and `learnable_weights_lora` to apply low-rank adaptation. Note that `basic` and `learnable_weights` are used with `run_full.py`, while `learnable_weights` is used with `run.py`.
+
 
 - **Training settings**
 
