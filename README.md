@@ -70,11 +70,9 @@ This repository enables two training branches:
 
 ### Branch A: Full Fine-Tuning
 
-Configuration files are located in: `run_learnable_full/`. 
-All experiments in this branch use `run_full.py`.
-
+Configuration files are located in: `run_learnable_full/`. All experiments in this branch use `run_full.py`.
 In the YAML configuration, choose the latent update mechanism via:
-- `latent_variant: coconut`: standard Coconut latent update.
+- `latent_variant: basic`: standard Coconut latent update.
 - `latent_variant: learnable_weights`: learnable latent-window aggregation.
 
 #### GSM8K
@@ -143,16 +141,12 @@ torchrun --nnodes 1 --nproc_per_node 2 run_full.py run_learnable_full/prosqa_coc
 ```
 ### Branch B: LoRA-Based Fine-Tuning
 
-Configuration files are located in: `run_learnable_weights/`. 
-All experiments in this branch use `run.py`.
-
-In the YAML configuration, LoRA-based latent reasoning via `latent_variant: learnable_weights_lora`: learnable latent-window aggregation.
-
-Otherwise the execution is analogous to Branch A.
+Configuration files are located in: `run_learnable_weights/`. All experiments in this branch use `run.py`.
+In the YAML configuration, LoRA-based latent reasoning via `latent_variant: learnable_weights_lora`: learnable latent-window aggregation. Otherwise the execution is analogous to Branch A.
 
 ## Configuration
 
-All experiment settings are defined in YAML files (for example [here](run_full.py run_learnable_full/gsm_coconut.yaml)).
+All experiment settings are defined in YAML files (for example [here](run_learnable_full/gsm_coconut.yaml)).
 
 - **General settings**
 
