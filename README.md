@@ -24,7 +24,7 @@ The contextual variant extends the latent reasoning stage by integrating short-r
 Clone the fork and set up the environment:
 
 ```
-git clone https://github.com/LuciaLicakova/coconut-contextual.git
+git clone https://github.com/LuciaLicakova/latent-reasoning-thesis.git
 cd coconut-contextual
 conda create --name coconut python=3.12
 conda activate coconut
